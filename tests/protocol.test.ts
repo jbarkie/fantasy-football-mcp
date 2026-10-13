@@ -26,7 +26,7 @@ async function connect(tools: ToolDef[]) {
 describe("MCP protocol", () => {
   it("initializes, lists tools and calls them with the official client", async () => {
     const client = await connect([echo, boom]);
-    expect(client.getServerVersion()?.name).toBe("sleeper-fantasy");
+    expect(client.getServerVersion()?.name).toBe("fantasy-football");
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(["echo", "boom"]);
     const res: any = await client.callTool({ name: "echo", arguments: { text: "hi" } });

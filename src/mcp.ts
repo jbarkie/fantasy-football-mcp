@@ -19,7 +19,7 @@ export interface ToolDef {
 }
 
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-const SERVER_INFO = { name: "sleeper-fantasy", version: "1.1.0" };
+const SERVER_INFO = { name: "fantasy-football", version: "1.1.0" };
 
 type Rpc = { jsonrpc: "2.0"; id?: string | number | null; method?: string; params?: any };
 

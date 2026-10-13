@@ -25,7 +25,7 @@ const playersFile = args.includes("--players-file") ? args[args.indexOf("--playe
 const withPlayers = args.includes("--players") || playersFile !== null;
 
 async function getJson(url: string) {
-  const res = await fetch(url, { headers: { "user-agent": "sleeper-fantasy-mcp cache builder" } });
+  const res = await fetch(url, { headers: { "user-agent": "fantasy-football-mcp cache builder" } });
   if (!res.ok) throw new Error(`${url} returned HTTP ${res.status}`);
   return res.json() as Promise<any>;
 }
