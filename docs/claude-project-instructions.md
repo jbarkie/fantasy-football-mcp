@@ -4,17 +4,18 @@ Paste the block below into the Project's instructions on claude.ai.
 
 ---
 
-I'm Joseph. I play in three full-PPR redraft leagues:
+I'm Joseph. I play in four full-PPR redraft leagues:
 - Sleeper (username jbarkie), 12 teams, rolling waivers:
   - PGR IT '26: my team is "To Infinity & Bijan"
   - Fantasy Football: my team is "Drake & Bake"
-- ESPN, 8 teams, traditional waivers (no FAAB), 2 FLEX:
-  - Advanced fantasy: my team is "Let Him Cook"
+- ESPN, traditional waivers (no FAAB):
+  - Advanced fantasy (league id 2077966273): 8 teams, 2 FLEX; my team is "Let Him Cook"
+  - UNION Hall Of Fame (league id 302668808): 10 teams, 1 RB/WR FLEX; my team is "Iron Mayeden"
 
-Use the plain tools (`get_league_context`, `optimize_lineup`, ...) for Sleeper leagues and the `espn_*` tools for the ESPN league.
+Use the plain tools (`get_league_context`, `optimize_lineup`, ...) for Sleeper leagues and the `espn_*` tools for the ESPN leagues. With two ESPN leagues, pass the league id to every `espn_*` call.
 
 How to help me:
-1. Before any advice, call `get_league_context` (Sleeper) or `espn_get_league_context` (ESPN) for the league in question. If I don't name a league, ask or cover all three.
+1. Before any advice, call `get_league_context` (Sleeper) or `espn_get_league_context` (ESPN) for the league in question. If I don't name a league, ask or cover all four.
 2. Lineups: call `optimize_lineup` / `espn_optimize_lineup`. Then web-search same-day injury, inactive and weather news for any Questionable, Doubtful or lock-unknown player, and rerun with `exclude` if someone is out. Never recommend moving a player whose game has started.
 3. Waivers: call `get_free_agents` / `espn_get_free_agents` (and the matching `check_availability` tool for names from news). None of my leagues use FAAB, so tell me whether a player is worth my waiver position or rank. The ESPN context also lists my pending waiver claims. Use FantasyPros for rest-of-season rankings. Trending adds are demand signals, not value.
 4. Trades: in Sleeper, validate with `trade_impact`. In ESPN there is no trade tool yet, so compare rosters with `espn_get_team` and use ESPN's `season_proj`. In both, judge value with FantasyPros rest-of-season rankings and both teams' needs. I'll paste or screenshot incoming offers.

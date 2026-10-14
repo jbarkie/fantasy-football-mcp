@@ -1,11 +1,13 @@
-# sleeper-fantasy-mcp
+# fantasy-football-mcp
 
-A read-only remote MCP server that gives Claude live context from Joseph's Sleeper leagues, plus optional ESPN leagues: rosters, lineup optimization, free agents, trade impact and league activity. It runs statelessly on Cloudflare Workers Free.
+A read-only remote MCP server that gives Claude live context from Joseph's Sleeper and ESPN fantasy football leagues: rosters, lineup optimization, free agents, trade impact and league activity. It runs statelessly on Cloudflare Workers Free.
 
 **Keeping requests under the free plan's 10 ms CPU limit:**
 - A GitHub Action prebuilds everything heavy into Workers KV: a trimmed player list with pre-normalized names, per-league pre-scored projections, and the schedule with kickoff times.
 - The server uses a small hand-written MCP handler (`src/mcp.ts`), so it has no runtime dependencies. The MCP SDK is only used in tests and `scripts/smoke.ts`.
 - Measured on 2026-10-06: most requests use 0–9 ms of CPU. A fresh isolate's first data request can reach about 16 ms, which falls within Cloudflare's tolerance for occasional overruns. If Claude ever shows "Worker exceeded resource limits" (error 1102), switch to Workers Paid ($5/month).
+
+Sleeper tools have plain names; ESPN tools are prefixed `espn_`.
 
 | Tool | What it returns |
 |---|---|
@@ -51,10 +53,10 @@ npx tsx scripts/smoke.ts http://localhost:8787/mcp/<token>
    - Secrets: `CLOUDFLARE_API_TOKEN` (needs the "Workers KV Storage: Edit" permission) and `CLOUDFLARE_ACCOUNT_ID`.
    - Variable: `KV_NAMESPACE_ID`.
    Then run the "Refresh cache" workflow manually.
-5. On claude.ai, go to Settings → Connectors → Add custom connector. Enter `https://sleeper-fantasy-mcp.<subdomain>.workers.dev/mcp/<token>` with no sign-in.
+5. On claude.ai, go to Settings → Connectors → Add custom connector. Enter `https://sleeper-fantasy-mcp.<subdomain>.workers.dev/mcp/<token>` with no sign-in. (The Worker keeps its original name from before the repo was renamed, so the URL is unchanged.)
 6. Create the Claude Project using `docs/claude-project-instructions.md`.
 
-The URL token is the only access control. The data is public Sleeper data, but keep the URL private so nobody else uses up the free quota.
+The URL token is the only access control. The Sleeper data is public, but keep the URL private so nobody else uses up the free quota.
 
 ## Notes
 

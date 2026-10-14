@@ -1,7 +1,7 @@
 {
-  "name": "sleeper-fantasy-mcp",
+  "name": "fantasy-football-mcp",
   "version": "1.0.0",
-  "description": "Read-only Sleeper fantasy football MCP server for Claude",
+  "description": "Read-only fantasy football MCP server for Claude (Sleeper and ESPN leagues)",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

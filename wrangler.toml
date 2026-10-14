@@ -1,3 +1,5 @@
+# Worker name predates the repo rename (fantasy-football-mcp). It is kept so the deployed
+# URL, its secrets and the claude.ai connector keep working.
 name = "sleeper-fantasy-mcp"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
