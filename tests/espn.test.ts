@@ -74,6 +74,34 @@ describe("ESPN prototype", () => {
     expect(young).toMatchObject({ team: "CAR", bye: true });
   });
 
+  it("reads this season's projection, not an earlier season's", async () => {
+    const r: any = await espnLeagueContext(makeDeps().deps, "");
+    // The fixture lists Jonathan Taylor's 2025 season projection (288.8) before 2026's.
+    expect(r.my_team.roster.find((p: any) => p.name === "Jonathan Taylor").season_proj).toBe(246.7);
+  });
+
+  it("keeps an excluded starter whose game has started, and reports unmatched names", async () => {
+    const { deps } = makeDeps({ now: "2026-10-13T18:00:00Z" });
+    const r: any = await espnOptimizeLineup(deps, "", ["Jonathan Taylor", "Not A Player"]);
+    expect(r.changes.bench.map((p: any) => p.name)).not.toContain("Jonathan Taylor");
+    expect(r.locked_exclusions.map((p: any) => p.name)).toEqual(["Jonathan Taylor"]);
+    expect(r.unresolved_exclusions).toEqual(["Not A Player"]);
+  });
+
+  it("benches an excluded starter whose game has not started", async () => {
+    const r: any = await espnOptimizeLineup(makeDeps().deps, "", ["jonathan taylor"]);
+    expect(r.changes.bench.map((p: any) => p.name)).toContain("Jonathan Taylor");
+    expect(r.unresolved_exclusions).toEqual([]);
+  });
+
+  it("flags a stale schedule only once it is stale", async () => {
+    const fresh: any = await espnLeagueContext(makeDeps().deps, "");
+    expect(fresh.data_gaps.join(" ")).not.toMatch(/stale/);
+    clearMemo();
+    const stale: any = await espnLeagueContext(makeDeps({ now: "2026-10-13T18:00:00Z" }).deps, "");
+    expect(stale.data_gaps).toContain("schedule cache is stale (fetched 2026-10-06T21:29:21.532Z).");
+  });
+
   it("resolves names from the cached ESPN index and queries status by id", async () => {
     const { deps, calls } = makeDeps();
     const r: any = await espnCheckAvailability(deps, "", ["Bijan Robinson", "Drake Maye", "Jayden Daniels", "Robinson"]);

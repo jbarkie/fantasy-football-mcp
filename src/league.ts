@@ -1,4 +1,4 @@
-import type { DataCache } from "./cache";
+import { kickoffGaps, staleGap, warningGaps, type DataCache } from "./cache";
 import { gameFor, type GameInfo } from "./schedule";
 import { normalizeName as normalize } from "./names";
 import { scoringHash } from "./scoring";
@@ -107,15 +107,9 @@ export async function loadLeague(deps: Deps, query: string, preloaded?: LeaguesC
     deps.cache.meta(),
   ]);
 
-  // Warnings name the weeks they affect; only surface ones for this week (or none named).
-  for (const w of meta?.warnings ?? []) {
-    const weeks = [...w.matchAll(/week (\d+)/g)].map((m) => Number(m[1]));
-    if (weeks.length === 0 || weeks.includes(week)) gaps.push(`Cache warning: ${w}`);
-  }
-  const STALE_MS = 36 * 3600 * 1000;
-  for (const [label, c] of [["players", playersC], ["projections", pointsC], ["schedule", schedC]] as const) {
-    if (c && deps.now().getTime() - new Date(c.fetched_at).getTime() > STALE_MS) gaps.push(`${label} cache is stale (fetched ${c.fetched_at}).`);
-  }
+  const now = deps.now();
+  gaps.push(...warningGaps(meta, week));
+  for (const [label, c] of [["players", playersC], ["projections", pointsC], ["schedule", schedC]] as const) gaps.push(...staleGap(label, c, now));
   if (!playersC) gaps.push("Player lookup cache is empty; names and positions are unavailable.");
   if (!pointsC) gaps.push(`No week ${week} projections cached; projected points are unavailable.`);
   else if (pointsC.data.scoring_hash !== scoringHash(league.scoring_settings ?? {})) {
@@ -126,9 +120,7 @@ export async function loadLeague(deps: Deps, query: string, preloaded?: LeaguesC
   const players = playersC?.data ?? {};
   const projections = new Map<string, number>(pointsC ? Object.entries(pointsC.data.points) : []);
   const games = schedC?.data ?? null;
-  if (games && games.some((g) => g.week === week && !g.kickoff)) {
-    gaps.push(`Some week ${week} games have no kickoff time; players in those games show locked: "unknown".`);
-  }
+  gaps.push(...kickoffGaps(games, week));
 
   const userById = new Map(users.map((u: any) => [u.user_id, u]));
   const teams = new Map<number, TeamView>();
@@ -154,7 +146,6 @@ export async function loadLeague(deps: Deps, query: string, preloaded?: LeaguesC
   }
   if (myRosterId < 0) throw new Error(`${deps.config.username} does not own a roster in ${league.name}`);
 
-  const now = deps.now();
   const view = (pid: string): PlayerView => {
     const p = players[pid];
     const g: GameInfo = gameFor(p?.[2] ?? null, week, games, now);

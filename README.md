@@ -16,11 +16,11 @@ Sleeper tools have plain names; ESPN tools are prefixed `espn_`.
 | `get_team` | Another team's roster |
 | `get_free_agents` | Best available players by league-scored projection + drop candidates |
 | `check_availability` | Who rosters a player in each league; ambiguous names return candidates |
-| `optimize_lineup` | Best legal lineup; locked players are never moved |
+| `optimize_lineup` | Best legal lineup; locked players are never moved (even if excluded), and missing projections never cause a swap |
 | `trade_impact` | Validated trade: both teams' lineup before/after, roster cuts |
 | `get_activity` | Recent transactions and Sleeper-wide trending adds/drops |
 | `espn_get_league_context` | ESPN: my roster with ESPN projections (league-scored, weekly + season), matchup, standings, my pending waiver claims |
-| `espn_optimize_lineup` | ESPN: best legal lineup; bye/OUT players never started |
+| `espn_optimize_lineup` | ESPN: best legal lineup; bye/OUT players never started, locked players never moved, and missing projections never cause a swap |
 | `espn_get_free_agents` | ESPN: available players by weekly projection, with season projection and ownership % |
 | `espn_check_availability` | ESPN: free agent / waivers / rostered by; names resolved via cached public ESPN player list |
 | `espn_get_team` | ESPN: another team's roster |

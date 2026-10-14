@@ -1,7 +1,7 @@
 // ESPN Fantasy Football (unofficial, undocumented API). Private leagues are read with
 // the owner's espn_s2 + SWID session cookies; this module only ever issues GETs.
-import type { DataCache } from "./cache";
-import { optimizeLineup, type LineupPlayer } from "./lineup";
+import { kickoffGaps, staleGap, warningGaps, type DataCache } from "./cache";
+import { LINEUP_NOTE, optimizeLineup, sumProjections, type LineupPlayer } from "./lineup";
 import { resolvePlayer } from "./league";
 import { gameFor } from "./schedule";
 import type { Game } from "./types";
@@ -67,10 +67,15 @@ const trimFilter = (season: string, period: number) => ({
   filterStatsForTopScoringPeriodIds: { value: 2, additionalValue: [`10${season}`, `11${season}${period}`] },
 });
 
-function viewPlayer(p: any, period: number, games: Game[] | null, now: Date) {
+// What a player view depends on: the season and week being viewed and the cached schedule.
+interface ViewCtx { season: number; period: number; games: Game[] | null }
+
+function viewPlayer(p: any, { season: seasonId, period, games }: ViewCtx, now: Date) {
   const team = PRO_TEAMS[p.proTeamId] ?? null;
-  const proj = (p.stats ?? []).find((s: any) => s.statSourceId === 1 && s.statSplitTypeId === 1 && s.scoringPeriodId === period);
-  const season = (p.stats ?? []).find((s: any) => s.statSourceId === 1 && s.statSplitTypeId === 0);
+  // ESPN can return earlier seasons' rows alongside this season's, so match the season too.
+  const projections = (p.stats ?? []).filter((s: any) => s.statSourceId === 1 && s.seasonId === seasonId);
+  const proj = projections.find((s: any) => s.statSplitTypeId === 1 && s.scoringPeriodId === period);
+  const season = projections.find((s: any) => s.statSplitTypeId === 0);
   const g = gameFor(team, period, games, now);
   return {
     id: String(p.id),
@@ -100,9 +105,9 @@ async function context(deps: EspnDeps, league: string) {
   if (!myTeam) throw new Error(`The ESPN session's user does not own a team in league ${leagueId}`);
   const schedC = await deps.cache.schedule(deps.espn.season);
   const games = schedC?.data ?? null;
-  const gaps: string[] = [];
+  const gaps = [...warningGaps(meta, period), ...staleGap("schedule", schedC, deps.now()), ...kickoffGaps(games, period)];
   if (!games) gaps.push("No NFL schedule cached; kickoffs, locks and byes are unknown.");
-  return { leagueId, base, period, myTeam, games, gaps, as_of: { espn_live: deps.now().toISOString(), schedule: schedC?.fetched_at ?? null, cache_last_run: meta?.last_run ?? null } };
+  return { leagueId, base, season: Number(deps.espn.season), period, myTeam, games, gaps, as_of: { espn_live: deps.now().toISOString(), schedule: schedC?.fetched_at ?? null, cache_last_run: meta?.last_run ?? null } };
 }
 
 function resolveLeague(cfg: EspnConfig, query: string) {
@@ -120,8 +125,8 @@ async function rosterFor(deps: EspnDeps, leagueId: string, teamId: number, perio
   return data.teams.find((t: any) => t.id === teamId)?.roster?.entries ?? [];
 }
 
-function rosterView(entries: any[], period: number, games: Game[] | null, now: Date) {
-  return entries.map((e) => ({ slot: SLOTS[e.lineupSlotId] ?? `slot ${e.lineupSlotId}`, ...viewPlayer(e.playerPoolEntry.player, period, games, now) }));
+function rosterView(entries: any[], c: ViewCtx, now: Date) {
+  return entries.map((e) => ({ slot: SLOTS[e.lineupSlotId] ?? `slot ${e.lineupSlotId}`, ...viewPlayer(e.playerPoolEntry.player, c, now) }));
 }
 
 export async function espnLeagueContext(deps: EspnDeps, league: string) {
@@ -133,7 +138,7 @@ export async function espnLeagueContext(deps: EspnDeps, league: string) {
     deps.espn.league(c.leagueId, ["mPendingTransactions"]),
     deps.cache.espnPlayers(),
   ]);
-  const roster = rosterView(entries, c.period, c.games, now);
+  const roster = rosterView(entries, c, now);
   const byTeam = new Map(c.base.teams.map((t: any) => [t.id, t]));
   const matchupPeriod: number = c.base.status.currentMatchupPeriod;
   const m = scores.schedule.find((g: any) => g.matchupPeriodId === matchupPeriod && (g.home?.teamId === c.myTeam.id || g.away?.teamId === c.myTeam.id));
@@ -189,8 +194,10 @@ export async function espnOptimizeLineup(deps: EspnDeps, league: string, exclude
   const c = await context(deps, league);
   const now = deps.now();
   const entries = await rosterFor(deps, c.leagueId, c.myTeam.id, c.period);
-  const roster: EspnPlayerView[] = entries.map((e: any) => viewPlayer(e.playerPoolEntry.player, c.period, c.games, now));
-  const excluded = new Set(exclude.map((x) => x.toLowerCase()));
+  const roster: EspnPlayerView[] = entries.map((e: any) => viewPlayer(e.playerPoolEntry.player, c, now));
+  // Exclusions match roster names; unmatched names are reported rather than silently ignored.
+  const onRoster = (n: string) => roster.filter((p) => p.name.toLowerCase() === n.toLowerCase().trim());
+  const excluded = new Set(exclude.flatMap(onRoster).map((p) => p.id));
   // Slots in roster order; ESPN gives counts, so expand them.
   const slotCounts: Record<string, number> = c.base.settings.rosterSettings.lineupSlotCounts;
   const starterSlots = Object.entries(slotCounts).flatMap(([id, n]) => {
@@ -205,37 +212,43 @@ export async function espnOptimizeLineup(deps: EspnDeps, league: string, exclude
     return i >= 0 ? String(pool.splice(i, 1)[0].playerId) : "0";
   });
   const irIds = new Set(entries.filter((e: any) => e.lineupSlotId === 21).map((e: any) => String(e.playerId)));
+  // Excluded players stay in the pool (marked unavailable) so the solver still sees their locks.
   const players: LineupPlayer[] = roster
-    .filter((p) => !irIds.has(p.id) && !excluded.has(p.name.toLowerCase()))
+    .filter((p) => !irIds.has(p.id))
     .map((p) => ({
       id: p.id,
       positions: [p.pos],
       points: p.proj,
       locked: p.locked,
-      unavailable: p.bye === true ? "bye" : p.injury && UNAVAILABLE.has(p.injury) ? p.injury : undefined,
+      unavailable: excluded.has(p.id) ? "excluded" : p.bye === true ? "bye" : p.injury && UNAVAILABLE.has(p.injury) ? p.injury : undefined,
     }));
   const res = optimizeLineup(starterSlots, players, currentIds);
   const byId = new Map(roster.map((p) => [p.id, p]));
   const before = new Set(currentIds.filter((id) => id !== "0"));
   const after = new Set(res.slots.map((s) => s.id).filter((id): id is string => !!id));
-  const current_projected = Math.round([...before].reduce((a, id) => a + (byId.get(id)?.proj ?? 0), 0) * 100) / 100;
+  const currentTotal = sumProjections([...before].map((id) => byId.get(id)?.proj ?? null));
   return {
     platform: "espn",
     league_id: c.leagueId,
     week: c.period,
-    current_projected,
+    status: players.some((p) => p.points !== null) ? "ok" : "no_projections",
+    current_projected: currentTotal.total,
     optimal_projected: res.total,
-    gain: Math.round((res.total - current_projected) * 100) / 100,
+    // Unprojected starters stay put, so they cancel out of the gain.
+    gain: Math.round((res.known_total - currentTotal.known_total) * 100) / 100,
     changes: {
       start: [...after].filter((id) => !before.has(id)).map((id) => byId.get(id)),
       bench: [...before].filter((id) => !after.has(id)).map((id) => byId.get(id)),
     },
     optimal: res.slots.map((s) => ({ slot: s.slot, fixed: s.fixed, ...(s.id ? byId.get(s.id) : { empty: true }) })),
     flagged_players: roster.filter((p) => p.injury || p.bye === true || p.locked === "unknown"),
+    unprojected_starters: res.slots.filter((s) => s.id && s.points === null).map((s) => byId.get(s.id!)),
+    locked_exclusions: res.slots.filter((s) => s.id && excluded.has(s.id)).map((s) => byId.get(s.id!)),
+    unresolved_exclusions: exclude.filter((n) => onRoster(n).length === 0),
     as_of: c.as_of,
     sources: { espn: SOURCE },
     data_gaps: c.gaps,
-    note: "Locked or lock-unknown players stay where they are. OUT/IR/suspended and bye-week players are never started. Questionable players are flagged; check same-day news. Make the moves in the ESPN app.",
+    note: LINEUP_NOTE + " Questionable players are flagged; check same-day news. Make the moves in the ESPN app.",
   };
 }
 
@@ -254,7 +267,7 @@ export async function espnFreeAgents(deps: EspnDeps, league: string, position?: 
   });
   // ESPN sorts by ownership; re-rank this week's options by league-scored projection.
   const players = (data.players ?? [])
-    .map((e: any) => ({ ...viewPlayer(e.player, c.period, c.games, now), status: e.status }))
+    .map((e: any) => ({ ...viewPlayer(e.player, c, now), status: e.status }))
     .sort((a: any, b: any) => (b.proj ?? -1) - (a.proj ?? -1))
     .slice(0, Math.min(limit, 50));
   return {
@@ -293,7 +306,7 @@ export async function espnCheckAvailability(deps: EspnDeps, league: string, name
     return {
       query,
       status: "ok",
-      player: viewPlayer(h.player, c.period, c.games, now),
+      player: viewPlayer(h.player, c, now),
       available: h.onTeamId === 0,
       on_waivers: h.status === "WAIVERS",
       rostered_by: h.onTeamId === 0 ? null : h.onTeamId === c.myTeam.id ? "me" : byTeam.get(h.onTeamId),
@@ -315,7 +328,7 @@ export async function espnGetTeam(deps: EspnDeps, league: string, team: string) 
     platform: "espn",
     league_id: c.leagueId,
     week: c.period,
-    team: { team_id: hit[0].id, team_name: teamName(hit[0]), record: `${hit[0].record?.overall?.wins ?? 0}-${hit[0].record?.overall?.losses ?? 0}`, roster: rosterView(entries, c.period, c.games, deps.now()) },
+    team: { team_id: hit[0].id, team_name: teamName(hit[0]), record: `${hit[0].record?.overall?.wins ?? 0}-${hit[0].record?.overall?.losses ?? 0}`, roster: rosterView(entries, c, deps.now()) },
     as_of: c.as_of,
     sources: { espn: SOURCE },
     data_gaps: c.gaps,
