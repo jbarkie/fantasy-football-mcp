@@ -1,4 +1,4 @@
-import { LINEUP_NOTE, optimizeLineup, sumProjections, type LineupPlayer } from "./lineup";
+import { LINEUP_NOTE, optimizeLineup, projectedGain, sumProjections, type LineupPlayer } from "./lineup";
 import { leagueRules, loadLeague, myLeagues, resolvePlayer, type Deps, type LeagueData, type TeamView } from "./league";
 
 const SOURCES = {
@@ -73,7 +73,7 @@ function findTeam(d: LeagueData, query: string): TeamView {
 function lineupWithChanges(d: LeagueData, t: TeamView, ids: string[], starters: string[], excluded?: Set<string>) {
   const slots = d.league.roster_positions.filter((s: string) => s !== "BN");
   const res = optimizeLineup(slots, lineupPlayers(d, ids, excluded), starters);
-  const current = sumProjections(starters.filter((id) => id !== "0").map((id) => d.projections.get(id) ?? null));
+  const current = sumProjections(starters.filter((id) => id !== "0").map((id) => ({ id, points: d.projections.get(id) ?? null })));
   return { res, current };
 }
 
@@ -194,8 +194,7 @@ export async function optimizeMyLineup(deps: Deps, league: string, exclude: stri
     status: projected ? "ok" : "no_projections",
     current_projected: current.total,
     optimal_projected: res.total,
-    // Unprojected starters stay put, so they cancel out of the gain.
-    gain: round(res.known_total - current.known_total),
+    gain: projectedGain(current, res),
     changes,
     optimal: res.slots.map((s) => ({ slot: s.slot, fixed: s.fixed, ...(s.id ? d.view(s.id) : { empty: true }) })),
     flagged_players: flagged,
@@ -241,7 +240,7 @@ export async function tradeImpact(deps: Deps, league: string, partner: string, g
       team: t.team_name,
       optimal_projected_before: b.res.total,
       optimal_projected_after: a.res.total,
-      weekly_change: round(a.res.known_total - b.res.known_total),
+      weekly_change: projectedGain(b.res, a.res),
       positions_before: counts(before),
       positions_after: counts(after),
       must_drop: Math.max(0, overBy),
@@ -253,7 +252,7 @@ export async function tradeImpact(deps: Deps, league: string, partner: string, g
     trade_deadline_week: d.league.settings?.trade_deadline,
     me: side(me, giveIds, getIds),
     partner: side(them, getIds, giveIds),
-    note: "Weekly projections only: this shows this week's lineup effect and roster fit, not rest-of-season value. Use FantasyPros rest-of-season rankings for value.",
+    note: "Weekly projections only: this shows this week's lineup effect and roster fit, not rest-of-season value. weekly_change is null when an unprojected starter enters or leaves the lineup. Use FantasyPros rest-of-season rankings for value.",
   });
 }
 

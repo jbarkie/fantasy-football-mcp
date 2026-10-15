@@ -53,6 +53,46 @@ function makeDeps(opts: { status?: number; now?: string } = {}) {
 beforeEach(() => clearMemo());
 
 describe("ESPN prototype", () => {
+  it("independent review: keeps a lock-unknown excluded ESPN starter", async () => {
+    const { deps } = makeDeps();
+    const get = deps.cache.kv.get.bind(deps.cache.kv);
+    deps.cache.kv.get = async (key, type) => key === "schedule:2026" ? null : get(key, type);
+    const r: any = await espnOptimizeLineup(deps, "", ["Jonathan Taylor"]);
+    expect(r.changes.bench.map((p: any) => p.name)).not.toContain("Jonathan Taylor");
+    expect(r.locked_exclusions.map((p: any) => p.name)).toContain("Jonathan Taylor");
+  });
+  it("independent review: surfaces cache warnings and missing kickoffs for ESPN", async () => {
+    const { deps } = makeDeps();
+    const get = deps.cache.kv.get.bind(deps.cache.kv);
+    deps.cache.kv.get = async (key, type) => {
+      const text = await get(key, type);
+      if (!text) return text;
+      const c = JSON.parse(text);
+      if (key === "meta") c.warnings = ["ESPN week 5: test failed refresh"];
+      if (key === "schedule:2026") c.data = c.data.map((g: any) => g.week === 5 ? {...g, kickoff: null} : g);
+      return JSON.stringify(c);
+    };
+    const r: any = await espnLeagueContext(deps, "");
+    expect(r.data_gaps.join(" ")).toMatch(/test failed refresh/);
+    expect(r.data_gaps.join(" ")).toMatch(/no kickoff time/);
+  });
+  it("independent review: gain is unknown if an unprojected excluded ESPN starter is replaced", async () => {
+    const { deps } = makeDeps();
+    const league = deps.espn.league.bind(deps.espn);
+    deps.espn.league = async (...args) => {
+      const data = await league(...args);
+      if (args[1].includes("mRoster")) {
+        for (const team of data.teams) for (const e of team.roster?.entries ?? []) {
+          const p = e.playerPoolEntry.player;
+          if (p.fullName === "Jonathan Taylor") p.stats = p.stats.filter((s: any) => !(s.statSourceId === 1 && s.statSplitTypeId === 1 && s.seasonId === 2026));
+        }
+      }
+      return data;
+    };
+    const r: any = await espnOptimizeLineup(deps, "", ["Jonathan Taylor"]);
+    expect(r.current_projected).toBeNull();
+    expect(r.gain).toBeNull();
+  });
   it("finds my team by SWID and names pending waiver claims", async () => {
     const { deps, calls } = makeDeps();
     const r: any = await espnLeagueContext(deps, "");

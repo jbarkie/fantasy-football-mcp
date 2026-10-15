@@ -1,7 +1,7 @@
 // ESPN Fantasy Football (unofficial, undocumented API). Private leagues are read with
 // the owner's espn_s2 + SWID session cookies; this module only ever issues GETs.
 import { kickoffGaps, staleGap, warningGaps, type DataCache } from "./cache";
-import { LINEUP_NOTE, optimizeLineup, sumProjections, type LineupPlayer } from "./lineup";
+import { LINEUP_NOTE, optimizeLineup, projectedGain, sumProjections, type LineupPlayer } from "./lineup";
 import { resolvePlayer } from "./league";
 import { gameFor } from "./schedule";
 import type { Game } from "./types";
@@ -226,7 +226,7 @@ export async function espnOptimizeLineup(deps: EspnDeps, league: string, exclude
   const byId = new Map(roster.map((p) => [p.id, p]));
   const before = new Set(currentIds.filter((id) => id !== "0"));
   const after = new Set(res.slots.map((s) => s.id).filter((id): id is string => !!id));
-  const currentTotal = sumProjections([...before].map((id) => byId.get(id)?.proj ?? null));
+  const currentTotal = sumProjections([...before].map((id) => ({ id, points: byId.get(id)?.proj ?? null })));
   return {
     platform: "espn",
     league_id: c.leagueId,
@@ -234,8 +234,7 @@ export async function espnOptimizeLineup(deps: EspnDeps, league: string, exclude
     status: players.some((p) => p.points !== null) ? "ok" : "no_projections",
     current_projected: currentTotal.total,
     optimal_projected: res.total,
-    // Unprojected starters stay put, so they cancel out of the gain.
-    gain: Math.round((res.known_total - currentTotal.known_total) * 100) / 100,
+    gain: projectedGain(currentTotal, res),
     changes: {
       start: [...after].filter((id) => !before.has(id)).map((id) => byId.get(id)),
       bench: [...before].filter((id) => !after.has(id)).map((id) => byId.get(id)),

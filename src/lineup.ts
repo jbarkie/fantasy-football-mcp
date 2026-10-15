@@ -20,6 +20,7 @@ export interface LineupResult {
   slots: Array<{ slot: string; id: string | null; points: number | null; fixed: boolean }>;
   total: number | null; // null when any filled slot has no projection
   known_total: number; // sum of the projections that exist
+  unprojected: string[]; // sorted ids of starters with no projection
   unsupported_slots: string[];
 }
 
@@ -27,14 +28,23 @@ export interface LineupResult {
 export const LINEUP_NOTE =
   "Locked or lock-unknown players stay where they are, even if excluded (see locked_exclusions). " +
   "Players ruled out (Out/IR/suspended) or on bye are never started. Starters with no projection stay in place and " +
-  "unprojected bench players are never moved in, so totals are null when a starter has no projection " +
-  "(gain still compares the projected players). An empty slot means no projected eligible player; pick one manually.";
+  "unprojected bench players are never moved in, so totals are null when a starter has no projection. " +
+  "gain is null when an unprojected starter would leave the lineup, since the change can't be measured. An empty slot means no projected eligible player; pick one manually.";
 
 // A lineup total is only known when every player in it has a projection. known_total is
 // still useful for comparing two lineups that share the same unprojected players.
-export function sumProjections(points: Array<number | null>) {
-  const known = Math.round(points.reduce<number>((a, p) => a + (p ?? 0), 0) * 100) / 100;
-  return { total: points.some((p) => p === null) ? null : known, known_total: known };
+export function sumProjections(starters: Array<{ id: string | null; points: number | null }>) {
+  const known = Math.round(starters.reduce<number>((a, s) => a + (s.points ?? 0), 0) * 100) / 100;
+  const unprojected = starters.filter((s) => s.points === null).map((s) => s.id ?? "").sort();
+  return { total: unprojected.length ? null : known, known_total: known, unprojected };
+}
+
+// The change between two lineups is only known when the same unprojected players start in
+// both, so their missing projections cancel. Otherwise (an unprojected starter is benched,
+// excluded or traded away) there is nothing to compare the replacement against.
+export function projectedGain(before: { known_total: number; unprojected: string[] }, after: { known_total: number; unprojected: string[] }) {
+  const same = before.unprojected.length === after.unprojected.length && before.unprojected.every((id, i) => id === after.unprojected[i]);
+  return same ? Math.round((after.known_total - before.known_total) * 100) / 100 : null;
 }
 
 // currentStarters is aligned with starterSlots (Sleeper's `starters` array, "0" = empty).
@@ -74,5 +84,5 @@ export function optimizeLineup(starterSlots: string[], players: LineupPlayer[], 
       result[i] = { slot, id: best.id, points: best.points, fixed: false };
     }
   }
-  return { slots: result, ...sumProjections(result.map((s) => s.points)), unsupported_slots: [...new Set(unsupported)] };
+  return { slots: result, ...sumProjections(result), unsupported_slots: [...new Set(unsupported)] };
 }

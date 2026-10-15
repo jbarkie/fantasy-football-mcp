@@ -5,7 +5,7 @@ import { clearMemo, DataCache, type KVLike } from "../src/cache";
 import { compactProjections, mergeSchedule } from "../src/compact";
 import type { Deps } from "../src/league";
 import { resolvePlayer } from "../src/league";
-import { optimizeLineup, sumProjections } from "../src/lineup";
+import { optimizeLineup, projectedGain, sumProjections } from "../src/lineup";
 import { scoreStats } from "../src/scoring";
 import { gameFor } from "../src/schedule";
 import { SleeperClient } from "../src/sleeper";
@@ -59,6 +59,36 @@ function makeDeps(opts: { now?: string; omit?: string[] } = {}): Deps {
 }
 
 beforeEach(() => clearMemo());
+
+describe("independent follow-up review", () => {
+  it("keeps a lock-unknown excluded Sleeper starter", async () => {
+    const r: any = await tools.optimizeMyLineup(makeDeps({ omit: ["schedule:2026"] }), "PGR", ["Josh Allen"]);
+    expect(r.optimal[0]).toMatchObject({ name: "Josh Allen", fixed: true, locked: "unknown" });
+    expect(r.locked_exclusions.map((p: any) => p.name)).toContain("Josh Allen");
+    expect(r.changes.bench.map((p: any) => p.name)).not.toContain("Josh Allen");
+  });
+  it("does not claim a known weekly trade improvement when the outgoing starter has no projection", async () => {
+    const deps = makeDeps();
+    const key = `points:${PGR}:2026:5`;
+    const c = JSON.parse((deps.cache as any).kv.store.get(key));
+    delete c.data.points["9509"]; // Bijan Robinson: healthy starting RB, unknown projection
+    (deps.cache as any).kv.store.set(key, JSON.stringify(c));
+    const r: any = await tools.tradeImpact(deps, "PGR", "5", ["Bijan Robinson"], ["Omarion Hampton"]);
+    expect(r.error).toBeUndefined();
+    expect(r.me.optimal_projected_before).toBeNull();
+    expect(r.me.weekly_change).toBeNull();
+  });
+  it("does not quantify a gain from replacing an explicitly excluded unprojected healthy starter", async () => {
+    const deps = makeDeps();
+    const key = `points:${PGR}:2026:5`;
+    const c = JSON.parse((deps.cache as any).kv.store.get(key));
+    delete c.data.points["9509"];
+    (deps.cache as any).kv.store.set(key, JSON.stringify(c));
+    const r: any = await tools.optimizeMyLineup(deps, "PGR", ["Bijan Robinson"]);
+    expect(r.current_projected).toBeNull();
+    expect(r.gain).toBeNull();
+  });
+});
 
 describe("scoring", () => {
   const leagues = fx("leagues.json");
@@ -172,7 +202,12 @@ describe("lineup solver", () => {
     const pool = [p("qb", "QB", 0, { points: null, unavailable: "Out" }), p("qb2", "QB", 0, { points: null })];
     const res = optimizeLineup(["QB"], pool, ["qb"]);
     expect(res.slots[0]).toMatchObject({ id: null, fixed: false });
-    expect(sumProjections([null, 3])).toEqual({ total: null, known_total: 3 });
+    expect(sumProjections([{ id: "a", points: null }, { id: "b", points: 3 }])).toEqual({ total: null, known_total: 3, unprojected: ["a"] });
+    // Unknowns cancel only when the same unprojected players start on both sides.
+    const a = sumProjections([{ id: "a", points: null }, { id: "b", points: 3 }]);
+    expect(projectedGain(a, sumProjections([{ id: "a", points: null }, { id: "c", points: 5 }]))).toBe(2);
+    expect(projectedGain(a, sumProjections([{ id: "d", points: 9 }, { id: "b", points: 3 }]))).toBeNull();
+    expect(projectedGain(sumProjections([{ id: "a", points: null }]), sumProjections([{ id: "a", points: null }]))).toBe(0);
   });
 });
 
