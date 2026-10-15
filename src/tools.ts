@@ -1,4 +1,4 @@
-import { optimizeLineup, type LineupPlayer } from "./lineup";
+import { LINEUP_NOTE, optimizeLineup, projectedGain, sumProjections, type LineupPlayer } from "./lineup";
 import { leagueRules, loadLeague, myLeagues, resolvePlayer, type Deps, type LeagueData, type TeamView } from "./league";
 
 const SOURCES = {
@@ -23,11 +23,12 @@ function envelope(d: LeagueData, body: Record<string, unknown>) {
   };
 }
 
-function lineupPlayers(d: LeagueData, ids: string[]): LineupPlayer[] {
+// Excluded players stay in the pool (marked unavailable) so the solver still sees their locks.
+function lineupPlayers(d: LeagueData, ids: string[], excluded: Set<string> = new Set()): LineupPlayer[] {
   return ids.map((id) => {
     const v = d.view(id);
     const p = d.players[id];
-    const unavailable = v.bye === true ? "bye" : v.injury && UNAVAILABLE.has(v.injury) ? v.injury : undefined;
+    const unavailable = excluded.has(id) ? "excluded" : v.bye === true ? "bye" : v.injury && UNAVAILABLE.has(v.injury) ? v.injury : undefined;
     return { id, positions: p?.[4] ?? [v.pos], points: v.proj, locked: v.locked, unavailable };
   });
 }
@@ -69,11 +70,11 @@ function findTeam(d: LeagueData, query: string): TeamView {
   return hit;
 }
 
-function lineupWithChanges(d: LeagueData, t: TeamView, ids: string[], starters: string[]) {
+function lineupWithChanges(d: LeagueData, t: TeamView, ids: string[], starters: string[], excluded?: Set<string>) {
   const slots = d.league.roster_positions.filter((s: string) => s !== "BN");
-  const res = optimizeLineup(slots, lineupPlayers(d, ids), starters);
-  const current = starters.reduce((a, id) => a + (d.projections.get(id) ?? 0), 0);
-  return { res, current: round(current) };
+  const res = optimizeLineup(slots, lineupPlayers(d, ids, excluded), starters);
+  const current = sumProjections(starters.filter((id) => id !== "0").map((id) => ({ id, points: d.projections.get(id) ?? null })));
+  return { res, current };
 }
 
 export async function getMyLeagues(deps: Deps) {
@@ -174,10 +175,12 @@ export async function optimizeMyLineup(deps: Deps, league: string, exclude: stri
   const unresolved = [];
   for (const n of exclude) {
     const r = resolvePlayer(d.players, n, new Set(me.players));
-    if (r.status === "ok") excluded.add(r.id); else unresolved.push(r);
+    if (r.status !== "ok") unresolved.push(r);
+    else if (!me.players.includes(r.id)) unresolved.push({ status: "not_on_roster", player: d.view(r.id).name, team: me.team_name });
+    else excluded.add(r.id);
   }
-  const ids = activeIds(me).filter((id) => !excluded.has(id));
-  const { res, current } = lineupWithChanges(d, me, ids, me.starters);
+  const ids = activeIds(me);
+  const { res, current } = lineupWithChanges(d, me, ids, me.starters, excluded);
   // Report who enters and leaves the lineup; reshuffles between equivalent slots are not changes.
   const before = new Set(me.starters.filter((id) => id !== "0"));
   const after = new Set(res.slots.map((s) => s.id).filter((id): id is string => !!id));
@@ -186,15 +189,19 @@ export async function optimizeMyLineup(deps: Deps, league: string, exclude: stri
     bench: [...before].filter((id) => !after.has(id)).map(d.view),
   };
   const flagged = ids.map(d.view).filter((v) => v.injury || v.bye === true || v.locked === "unknown");
+  const projected = ids.some((id) => d.view(id).proj !== null);
   return envelope(d, {
-    current_projected: current,
+    status: projected ? "ok" : "no_projections",
+    current_projected: current.total,
     optimal_projected: res.total,
-    gain: round(res.total - current),
+    gain: projectedGain(current, res),
     changes,
     optimal: res.slots.map((s) => ({ slot: s.slot, fixed: s.fixed, ...(s.id ? d.view(s.id) : { empty: true }) })),
     flagged_players: flagged,
+    unprojected_starters: res.slots.filter((s) => s.id && s.points === null).map((s) => d.view(s.id!)),
+    locked_exclusions: res.slots.filter((s) => s.id && excluded.has(s.id)).map((s) => d.view(s.id!)),
     unresolved_exclusions: unresolved,
-    note: "Locked or lock-unknown players stay where they are. Players tagged Out/IR/Sus or on bye are never started. Questionable/Doubtful players are flagged, not benched; check same-day news.",
+    note: LINEUP_NOTE + " Questionable/Doubtful players are flagged, not benched; check same-day news.",
   });
 }
 
@@ -233,7 +240,7 @@ export async function tradeImpact(deps: Deps, league: string, partner: string, g
       team: t.team_name,
       optimal_projected_before: b.res.total,
       optimal_projected_after: a.res.total,
-      weekly_change: round(a.res.total - b.res.total),
+      weekly_change: projectedGain(b.res, a.res),
       positions_before: counts(before),
       positions_after: counts(after),
       must_drop: Math.max(0, overBy),
@@ -245,7 +252,7 @@ export async function tradeImpact(deps: Deps, league: string, partner: string, g
     trade_deadline_week: d.league.settings?.trade_deadline,
     me: side(me, giveIds, getIds),
     partner: side(them, getIds, giveIds),
-    note: "Weekly projections only: this shows this week's lineup effect and roster fit, not rest-of-season value. Use FantasyPros rest-of-season rankings for value.",
+    note: "Weekly projections only: this shows this week's lineup effect and roster fit, not rest-of-season value. weekly_change is null when an unprojected starter enters or leaves the lineup. Use FantasyPros rest-of-season rankings for value.",
   });
 }
 

@@ -5,8 +5,9 @@ import { clearMemo, DataCache, type KVLike } from "../src/cache";
 import { compactProjections, mergeSchedule } from "../src/compact";
 import type { Deps } from "../src/league";
 import { resolvePlayer } from "../src/league";
-import { optimizeLineup } from "../src/lineup";
+import { optimizeLineup, projectedGain, sumProjections } from "../src/lineup";
 import { scoreStats } from "../src/scoring";
+import { gameFor } from "../src/schedule";
 import { SleeperClient } from "../src/sleeper";
 import * as tools from "../src/tools";
 
@@ -59,6 +60,36 @@ function makeDeps(opts: { now?: string; omit?: string[] } = {}): Deps {
 
 beforeEach(() => clearMemo());
 
+describe("independent follow-up review", () => {
+  it("keeps a lock-unknown excluded Sleeper starter", async () => {
+    const r: any = await tools.optimizeMyLineup(makeDeps({ omit: ["schedule:2026"] }), "PGR", ["Josh Allen"]);
+    expect(r.optimal[0]).toMatchObject({ name: "Josh Allen", fixed: true, locked: "unknown" });
+    expect(r.locked_exclusions.map((p: any) => p.name)).toContain("Josh Allen");
+    expect(r.changes.bench.map((p: any) => p.name)).not.toContain("Josh Allen");
+  });
+  it("does not claim a known weekly trade improvement when the outgoing starter has no projection", async () => {
+    const deps = makeDeps();
+    const key = `points:${PGR}:2026:5`;
+    const c = JSON.parse((deps.cache as any).kv.store.get(key));
+    delete c.data.points["9509"]; // Bijan Robinson: healthy starting RB, unknown projection
+    (deps.cache as any).kv.store.set(key, JSON.stringify(c));
+    const r: any = await tools.tradeImpact(deps, "PGR", "5", ["Bijan Robinson"], ["Omarion Hampton"]);
+    expect(r.error).toBeUndefined();
+    expect(r.me.optimal_projected_before).toBeNull();
+    expect(r.me.weekly_change).toBeNull();
+  });
+  it("does not quantify a gain from replacing an explicitly excluded unprojected healthy starter", async () => {
+    const deps = makeDeps();
+    const key = `points:${PGR}:2026:5`;
+    const c = JSON.parse((deps.cache as any).kv.store.get(key));
+    delete c.data.points["9509"];
+    (deps.cache as any).kv.store.set(key, JSON.stringify(c));
+    const r: any = await tools.optimizeMyLineup(deps, "PGR", ["Bijan Robinson"]);
+    expect(r.current_projected).toBeNull();
+    expect(r.gain).toBeNull();
+  });
+});
+
 describe("scoring", () => {
   const leagues = fx("leagues.json");
   const proj = compactProjections(fx("projections_2026_5.json"));
@@ -105,6 +136,24 @@ describe("schedule merge", () => {
   });
 });
 
+describe("bye detection", () => {
+  const games = JSON.parse(bulk.find((e) => e.key === "schedule:2026")!.value).data;
+  const now = new Date("2026-10-07T18:00Z");
+
+  it("calls a team on bye when all 17 of its games are in other weeks", () => {
+    expect(gameFor("CAR", 5, games, now)).toMatchObject({ bye: true, locked: false, opponent: null });
+  });
+
+  it("leaves bye and lock unknown when the team's games are not all accounted for", () => {
+    // 13 games in the week used to be taken as proof of a complete slate.
+    const partial = Array.from({ length: 13 }, (_, i) => ({ week: 5, home: `H${i}`, away: `A${i}`, date: "2026-10-11", status: "pre_game", kickoff: null }));
+    expect(gameFor("ATL", 5, partial, now)).toMatchObject({ bye: "unknown", locked: "unknown" });
+    // A week missing one of ATL's real games: ATL then has only 16 games in the season.
+    const withoutAtl = games.filter((g: any) => !(g.week === 5 && (g.home === "ATL" || g.away === "ATL")));
+    expect(gameFor("ATL", 5, withoutAtl, now)).toMatchObject({ bye: "unknown", locked: "unknown" });
+  });
+});
+
 describe("lineup solver", () => {
   const slots = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF"];
   const p = (id: string, pos: string, points: number, extra: object = {}) => ({ id, positions: [pos], points, locked: false as const, ...extra });
@@ -128,6 +177,37 @@ describe("lineup solver", () => {
     const res = optimizeLineup(slots, locked, current);
     expect(res.slots[3]).toMatchObject({ id: "wr1", fixed: true });
     expect(res.slots.map((s) => s.id)).not.toContain("rb3");
+  });
+
+  it("keeps a locked starter even when it is excluded", () => {
+    const pool = roster.map((x) => (x.id === "qb" ? { ...x, locked: true as const, unavailable: "excluded" } : x));
+    const current = ["qb", "rb1", "rb2", "wr1", "wr2", "te2", "rb3", "wr3", "k", "def"];
+    expect(optimizeLineup(slots, pool, current).slots[0]).toMatchObject({ id: "qb", fixed: true });
+  });
+
+  it("never swaps on a missing projection and reports the total as unknown", () => {
+    const pool = [
+      ...roster.map((x) => (x.id === "rb2" ? { ...x, points: null } : x)),
+      p("rookie", "RB", 0, { points: null }), // bench, no projection
+    ];
+    const current = ["qb", "rb1", "rb2", "wr1", "wr2", "te2", "rb3", "wr3", "k", "def"];
+    const res = optimizeLineup(slots, pool, current);
+    expect(res.slots[2]).toMatchObject({ id: "rb2", fixed: true, points: null });
+    expect(res.slots.map((s) => s.id)).not.toContain("rookie");
+    expect(res.total).toBeNull();
+    expect(res.known_total).toBe(20 + 15 + 16 + 12 + 12.5 + 13 + 11 + 8 + 7);
+  });
+
+  it("still benches an Out starter with no projection, leaving the slot empty without a projected backup", () => {
+    const pool = [p("qb", "QB", 0, { points: null, unavailable: "Out" }), p("qb2", "QB", 0, { points: null })];
+    const res = optimizeLineup(["QB"], pool, ["qb"]);
+    expect(res.slots[0]).toMatchObject({ id: null, fixed: false });
+    expect(sumProjections([{ id: "a", points: null }, { id: "b", points: 3 }])).toEqual({ total: null, known_total: 3, unprojected: ["a"] });
+    // Unknowns cancel only when the same unprojected players start on both sides.
+    const a = sumProjections([{ id: "a", points: null }, { id: "b", points: 3 }]);
+    expect(projectedGain(a, sumProjections([{ id: "a", points: null }, { id: "c", points: 5 }]))).toBe(2);
+    expect(projectedGain(a, sumProjections([{ id: "d", points: 9 }, { id: "b", points: 3 }]))).toBeNull();
+    expect(projectedGain(sumProjections([{ id: "a", points: null }]), sumProjections([{ id: "a", points: null }]))).toBe(0);
   });
 });
 
@@ -200,6 +280,31 @@ describe("tools against live fixtures", () => {
     // Swapping two players between the FLEX slots is not a change.
     const started = new Set(r.changes.start.map((p: any) => p.id));
     for (const p of r.changes.bench) expect(started.has(p.id)).toBe(false);
+  });
+
+  it("benches an excluded starter whose game has not started", async () => {
+    const r: any = await tools.optimizeMyLineup(makeDeps(), "PGR", ["Bijan Robinson", "Jalen Hurts"]);
+    expect(r.changes.bench.map((p: any) => p.id)).toContain("9509");
+    expect(r.locked_exclusions).toEqual([]);
+    // Jalen Hurts is on my other league's roster, not this one.
+    expect(r.unresolved_exclusions).toMatchObject([{ status: "not_on_roster", player: "Jalen Hurts" }]);
+  });
+
+  it("keeps an excluded starter whose game has started, and says so", async () => {
+    // Sunday afternoon of week 5: Josh Allen's game has kicked off.
+    const r: any = await tools.optimizeMyLineup(makeDeps({ now: "2026-10-13T18:00:00Z" }), "PGR", ["Josh Allen"]);
+    expect(r.changes.bench).toEqual([]);
+    expect(r.optimal[0]).toMatchObject({ name: "Josh Allen", fixed: true, locked: true });
+    expect(r.locked_exclusions.map((p: any) => p.name)).toEqual(["Josh Allen"]);
+  });
+
+  it("keeps the current lineup when no projections are cached", async () => {
+    const r: any = await tools.optimizeMyLineup(makeDeps({ omit: [`points:${PGR}:2026:5`] }), "PGR");
+    expect(r.status).toBe("no_projections");
+    expect(r.changes).toEqual({ start: [], bench: [] });
+    expect(r.current_projected).toBeNull();
+    expect(r.optimal_projected).toBeNull();
+    expect(r.gain).toBe(0);
   });
 
   it("does not move players whose games have kicked off", async () => {

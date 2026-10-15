@@ -9,6 +9,10 @@ export interface GameInfo {
   bye: boolean | "unknown";
 }
 
+// Regular-season games per team (17 since 2021). A team is provably on bye in a week only when
+// all of its games are accounted for in other weeks; otherwise the week's slate may be incomplete.
+const GAMES_PER_TEAM = 17;
+
 export function gameFor(team: string | null, week: number, games: Game[] | null, now: Date): GameInfo {
   const unknown: GameInfo = { opponent: null, home: null, kickoff: null, locked: "unknown", bye: "unknown" };
   if (!team || !games) return unknown;
@@ -17,8 +21,8 @@ export function gameFor(team: string | null, week: number, games: Game[] | null,
   const mine = weekGames.filter((x) => x.home === team || x.away === team);
   const g = mine.find((x) => x.kickoff) ?? mine[0];
   if (!g) {
-    // Only call it a bye when the week's slate looks complete (a full week has 13-16 games).
-    return { ...unknown, bye: weekGames.length >= 13 ? true : "unknown", locked: false };
+    const played = new Set(games.filter((x) => x.home === team || x.away === team).map((x) => x.week));
+    return played.size === GAMES_PER_TEAM ? { ...unknown, bye: true, locked: false } : unknown;
   }
   const home = g.home === team;
   const done = g.status === "complete" || g.status === "in_progress";

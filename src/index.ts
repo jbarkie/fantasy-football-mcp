@@ -76,7 +76,7 @@ export function buildTools(deps: Deps): ToolDef[] {
     },
     {
       name: "optimize_lineup",
-      description: "Sleeper league: best legal lineup for my team this week by league-scored projection, with the changes from my current lineup. Locked and lock-unknown players are not moved. Use `exclude` to bench players (e.g. after injury news).",
+      description: "Sleeper league: best legal lineup for my team this week by league-scored projection, with the changes from my current lineup. Locked and lock-unknown players are not moved, even if excluded. Starters without a projection are kept, and totals are null when any starter lacks one. Use `exclude` to bench players (e.g. after injury news).",
       inputSchema: {
         type: "object",
         properties: { league: LEAGUE, exclude: NAMES("Player names to treat as unavailable") },
@@ -124,7 +124,7 @@ export function buildEspnTools(deps: espn.EspnDeps): ToolDef[] {
     },
     {
       name: "espn_optimize_lineup",
-      description: "ESPN league: best legal lineup this week by ESPN projection, with changes from my current lineup. Bye-week and OUT players are never started; locked players are not moved.",
+      description: "ESPN league: best legal lineup this week by ESPN projection, with changes from my current lineup. Bye-week and OUT players are never started; locked players are not moved, even if excluded. Starters without a projection are kept, and totals are null when any starter lacks one. Use `exclude` to bench players.",
       inputSchema: {
         type: "object",
         properties: { league: ESPN_LEAGUE, exclude: NAMES("Player names to treat as unavailable") },

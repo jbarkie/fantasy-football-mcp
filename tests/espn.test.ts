@@ -53,6 +53,46 @@ function makeDeps(opts: { status?: number; now?: string } = {}) {
 beforeEach(() => clearMemo());
 
 describe("ESPN prototype", () => {
+  it("independent review: keeps a lock-unknown excluded ESPN starter", async () => {
+    const { deps } = makeDeps();
+    const get = deps.cache.kv.get.bind(deps.cache.kv);
+    deps.cache.kv.get = async (key, type) => key === "schedule:2026" ? null : get(key, type);
+    const r: any = await espnOptimizeLineup(deps, "", ["Jonathan Taylor"]);
+    expect(r.changes.bench.map((p: any) => p.name)).not.toContain("Jonathan Taylor");
+    expect(r.locked_exclusions.map((p: any) => p.name)).toContain("Jonathan Taylor");
+  });
+  it("independent review: surfaces cache warnings and missing kickoffs for ESPN", async () => {
+    const { deps } = makeDeps();
+    const get = deps.cache.kv.get.bind(deps.cache.kv);
+    deps.cache.kv.get = async (key, type) => {
+      const text = await get(key, type);
+      if (!text) return text;
+      const c = JSON.parse(text);
+      if (key === "meta") c.warnings = ["ESPN week 5: test failed refresh"];
+      if (key === "schedule:2026") c.data = c.data.map((g: any) => g.week === 5 ? {...g, kickoff: null} : g);
+      return JSON.stringify(c);
+    };
+    const r: any = await espnLeagueContext(deps, "");
+    expect(r.data_gaps.join(" ")).toMatch(/test failed refresh/);
+    expect(r.data_gaps.join(" ")).toMatch(/no kickoff time/);
+  });
+  it("independent review: gain is unknown if an unprojected excluded ESPN starter is replaced", async () => {
+    const { deps } = makeDeps();
+    const league = deps.espn.league.bind(deps.espn);
+    deps.espn.league = async (...args) => {
+      const data = await league(...args);
+      if (args[1].includes("mRoster")) {
+        for (const team of data.teams) for (const e of team.roster?.entries ?? []) {
+          const p = e.playerPoolEntry.player;
+          if (p.fullName === "Jonathan Taylor") p.stats = p.stats.filter((s: any) => !(s.statSourceId === 1 && s.statSplitTypeId === 1 && s.seasonId === 2026));
+        }
+      }
+      return data;
+    };
+    const r: any = await espnOptimizeLineup(deps, "", ["Jonathan Taylor"]);
+    expect(r.current_projected).toBeNull();
+    expect(r.gain).toBeNull();
+  });
   it("finds my team by SWID and names pending waiver claims", async () => {
     const { deps, calls } = makeDeps();
     const r: any = await espnLeagueContext(deps, "");
@@ -72,6 +112,34 @@ describe("ESPN prototype", () => {
     expect(r.gain).toBeCloseTo(20.48, 2);
     const young = r.flagged_players.find((p: any) => p.name === "Bryce Young");
     expect(young).toMatchObject({ team: "CAR", bye: true });
+  });
+
+  it("reads this season's projection, not an earlier season's", async () => {
+    const r: any = await espnLeagueContext(makeDeps().deps, "");
+    // The fixture lists Jonathan Taylor's 2025 season projection (288.8) before 2026's.
+    expect(r.my_team.roster.find((p: any) => p.name === "Jonathan Taylor").season_proj).toBe(246.7);
+  });
+
+  it("keeps an excluded starter whose game has started, and reports unmatched names", async () => {
+    const { deps } = makeDeps({ now: "2026-10-13T18:00:00Z" });
+    const r: any = await espnOptimizeLineup(deps, "", ["Jonathan Taylor", "Not A Player"]);
+    expect(r.changes.bench.map((p: any) => p.name)).not.toContain("Jonathan Taylor");
+    expect(r.locked_exclusions.map((p: any) => p.name)).toEqual(["Jonathan Taylor"]);
+    expect(r.unresolved_exclusions).toEqual(["Not A Player"]);
+  });
+
+  it("benches an excluded starter whose game has not started", async () => {
+    const r: any = await espnOptimizeLineup(makeDeps().deps, "", ["jonathan taylor"]);
+    expect(r.changes.bench.map((p: any) => p.name)).toContain("Jonathan Taylor");
+    expect(r.unresolved_exclusions).toEqual([]);
+  });
+
+  it("flags a stale schedule only once it is stale", async () => {
+    const fresh: any = await espnLeagueContext(makeDeps().deps, "");
+    expect(fresh.data_gaps.join(" ")).not.toMatch(/stale/);
+    clearMemo();
+    const stale: any = await espnLeagueContext(makeDeps({ now: "2026-10-13T18:00:00Z" }).deps, "");
+    expect(stale.data_gaps).toContain("schedule cache is stale (fetched 2026-10-06T21:29:21.532Z).");
   });
 
   it("resolves names from the cached ESPN index and queries status by id", async () => {
