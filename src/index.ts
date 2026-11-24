@@ -17,7 +17,7 @@ export interface Env {
   ESPN_LEAGUES?: string;
 }
 
-const LEAGUE = { type: "string", description: 'League name or ID, e.g. "PGR IT \'26" or "Fantasy Football"' };
+const LEAGUE = { type: "string", description: 'League name or ID, e.g. "Fantasy Football" or a Sleeper league ID' };
 const NAMES = (description: string, max = 20) => ({ type: "array", items: { type: "string" }, maxItems: max, description });
 const ro = { readOnlyHint: true, openWorldHint: true };
 
